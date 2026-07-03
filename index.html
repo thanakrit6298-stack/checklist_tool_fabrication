@@ -1805,7 +1805,7 @@ const WEEKLY_REF = db.ref('fab/weekly');
 let weeklyAllData = {};      // all weeks data from Firebase
 let wkTab = 'submit';        // submit | review | history (admin)
 let wkPubName = '';          // selected responsible person (public)
-let wkDrafts = {};           // { toolId: { image, condition, note } }
+let wkDrafts = {};           // { toolId: { image, units, note } }
 let wkExpandedCards = {};    // { toolId: bool }
 let wkHistWeek = '';         // selected week for history
 let wkPage = false;          // is weekly page active?
@@ -1894,6 +1894,22 @@ function hideWeeklyPage(){
   document.getElementById('tb-cur').textContent='ทั้งหมด';
 }
 
+/* ── Draft completeness helper ──
+   A tool's weekly draft is "complete" once a photo has been taken
+   AND every physical unit has an assigned condition. This is the
+   single source of truth used both to enable/disable the submit
+   button and to validate before actually writing to Firebase. */
+function wkDraftComplete(t){
+  const d=wkDrafts[t.id];
+  if(!d||!d.image) return false;
+  const qty=parseInt(t.qty);
+  const unitCount=isNaN(qty)?1:Math.max(1,qty);
+  for(let i=1;i<=unitCount;i++){
+    if(!d.units||!d.units[i]) return false;
+  }
+  return true;
+}
+
 /* ── Main render ── */
 function renderWeeklyPage(){
   const root=document.getElementById('wk-root');
@@ -1953,7 +1969,7 @@ function renderWeeklyPage(){
       <div class="wk-progress-label">ความคืบหน้าสัปดาห์นี้</div>
       <div class="wk-progress-nums">${done} / ${total} รายการ (${pct}%)</div>
     </div>
-    <div class="wk-bar-track"><div class="wk-bar-fill ${pct===100?'':'pct<50'}" style="width:${pct}%;background:${pct===100?'var(--green-mid)':pct<50?'var(--red-mid)':'var(--yellow-mid)'}"></div></div>
+    <div class="wk-bar-track"><div class="wk-bar-fill" style="width:${pct}%;background:${pct===100?'var(--green-mid)':pct<50?'var(--red-mid)':'var(--yellow-mid)'}"></div></div>
     ${renderProgressTags(sub)}
   </div>
   ${tabsHTML}
@@ -1985,6 +2001,10 @@ function renderPublicSubmit(sub,wk){
   const nameOpts=names.map(n=>`<option value="${esc(n)}"${n===wkPubName?'selected':''}>${esc(n)}</option>`).join('');
   const myTools=wkPubName?tools.filter(t=>t.resp&&t.resp.trim()===wkPubName):[];
   const doneCount=myTools.filter(t=>sub[t.id]).length;
+  const editableTools=myTools.filter(t=>{
+    const existing=sub[t.id];
+    return !existing||existing.status==='redo';
+  });
 
   const toolCards=myTools.map(t=>{
     const existing=sub[t.id];
@@ -1997,7 +2017,6 @@ function renderPublicSubmit(sub,wk){
       else { statusCls='pending'; statusTxt='✓ ส่งแล้ว – รอตรวจสอบ'; }
     }
     const imgSrc=draft.image||(existing?existing.image:null);
-    const cond=draft.condition||(existing?existing.condition:'');
     const note=draft.note!==undefined?draft.note:(existing?existing.note:'');
     const canEdit=!existing||(existing&&existing.status==='redo');
 
@@ -2043,11 +2062,12 @@ function renderPublicSubmit(sub,wk){
     </div>`;
   }).join('');
 
-  const allFilled=myTools.length>0&&myTools.every(t=>wkDrafts[t.id]?.image&&wkDrafts[t.id]?.condition);
+  const allFilled=editableTools.length>0&&editableTools.every(t=>wkDraftComplete(t));
+  const remainingCount=editableTools.length;
   const submitBar=myTools.length>0?`
   <div class="wk-submit-bar">
-    <div class="wk-submit-info">ส่งแล้ว ${doneCount}/${myTools.length} รายการ · กรุณากรอกทุกรายการก่อนส่ง</div>
-    <button class="btn-wk-submit" onclick="submitAllWk('${wk}')" ${allFilled?'':'disabled'}>ส่งรูปทั้งหมด</button>
+    <div class="wk-submit-info">ส่งแล้ว ${doneCount}/${myTools.length} รายการ${remainingCount>0?` · เหลือ ${remainingCount} รายการที่ต้องกรอกให้ครบก่อนส่ง`:' · ส่งครบทุกรายการแล้ว'}</div>
+    <button class="btn-wk-submit" onclick="submitAllWk('${wk}')" ${(remainingCount>0&&allFilled)?'':'disabled'}>ส่งรูปทั้งหมด</button>
   </div>`:'';
 
   return `
@@ -2178,19 +2198,24 @@ function trigWkImg(id){ document.getElementById(`wkfi-${id}`)?.click(); }
 async function onWkImg(e,id){
   const file=e.target.files[0]; if(!file) return;
   toast('กำลังบีบอัดรูป...','warn');
-  const b64=await compressImage(file,800,800,0.75);
-  if(!wkDrafts[id]) wkDrafts[id]={units:{},note:''};
-  wkDrafts[id].image=b64;
-  wkExpandedCards[id]=true;
-  // Update only the image zone — don't re-render whole page
-  const zone=document.getElementById(`wkimgzone-${id}`);
-  if(zone){
-    zone.innerHTML=`<img src="${b64}" alt="" style="width:100%;height:100%;object-fit:cover">
-    <div class="wk-img-overlay">📷 เปลี่ยนรูป</div>
-    <input type="file" class="wk-img-input" id="wkfi-${id}" accept="image/*" capture="environment" onchange="onWkImg(event,${id})">`;
+  try{
+    const b64=await compressImage(file,800,800,0.75);
+    if(!wkDrafts[id]) wkDrafts[id]={image:null,units:{},note:''};
+    wkDrafts[id].image=b64;
+    wkExpandedCards[id]=true;
+    // Update only the image zone — don't re-render whole page
+    const zone=document.getElementById(`wkimgzone-${id}`);
+    if(zone){
+      zone.innerHTML=`<img src="${b64}" alt="" style="width:100%;height:100%;object-fit:cover">
+      <div class="wk-img-overlay">📷 เปลี่ยนรูป</div>
+      <input type="file" class="wk-img-input" id="wkfi-${id}" accept="image/*" capture="environment" onchange="onWkImg(event,${id})">`;
+    }
+    updateSubmitBtn();
+    toast('อัพโหลดรูปภาพสำเร็จ');
+  }catch(err){
+    console.error(err);
+    toast('อัพโหลดรูปล้มเหลว กรุณาลองใหม่','warn');
   }
-  updateSubmitBtn();
-  toast('อัพโหลดรูปภาพสำเร็จ');
 }
 function setWkUnitCond(toolId,unitNum,cond){
   if(!wkDrafts[toolId]) wkDrafts[toolId]={image:null,units:{},note:''};
@@ -2208,44 +2233,54 @@ function setWkNote(id,val){
   wkDrafts[id].note=val;
 }
 function updateSubmitBtn(){
+  const wk=getWeekKey();
+  const sub=weeklyAllData[wk]||{};
   const myTools=wkPubName?tools.filter(t=>t.resp&&t.resp.trim()===wkPubName):[];
-  const allFilled=myTools.length>0&&myTools.every(t=>{
-    const d=wkDrafts[t.id]; if(!d?.image) return false;
-    const qty=parseInt(t.qty);
-    const unitCount=isNaN(qty)?1:Math.max(1,qty);
-    for(let i=1;i<=unitCount;i++){
-      if(!d.units?.[i]) return false;
-    }
-    return true;
+  const editableTools=myTools.filter(t=>{
+    const existing=sub[t.id];
+    return !existing||existing.status==='redo';
   });
+  const allFilled=editableTools.length>0&&editableTools.every(t=>wkDraftComplete(t));
   const btn=document.querySelector('.btn-wk-submit');
   if(btn) btn.disabled=!allFilled;
 }
 async function submitAllWk(wk){
+  if(!wkPubName){ toast('กรุณาเลือกชื่อของคุณก่อน','warn'); return; }
   const myTools=tools.filter(t=>t.resp&&t.resp.trim()===wkPubName);
-  const allOk=myTools.every(t=>wkDrafts[t.id]?.image&&wkDrafts[t.id]?.condition);
-  if(!allOk){ toast('กรุณาถ่ายรูปและประเมินสภาพให้ครบทุกรายการ','warn'); return; }
-  toast('กำลังส่งข้อมูล...','warn');
-  const updates={};
-  const now=new Date().toISOString();
-  myTools.forEach(t=>{
-    const d=wkDrafts[t.id];
-    // compute overall condition from units (worst case)
-    const unitVals=Object.values(d.units||{});
-    const overall=unitVals.includes('bad')?'bad':unitVals.includes('warn')?'warn':unitVals.length?'ok':'none';
-    updates[`fab/weekly/${wk}/${t.id}`]={
-      submittedBy: wkPubName,
-      submittedAt: now,
-      image: d.image,
-      units: d.units||{},
-      condition: overall,
-      note: d.note||'',
-      status: 'pending',
-    };
+  const sub=weeklyAllData[wk]||{};
+  const editableTools=myTools.filter(t=>{
+    const existing=sub[t.id];
+    return !existing||existing.status==='redo';
   });
-  await db.ref().update(updates);
-  wkDrafts={};
-  toast(`ส่งรูป ${myTools.length} รายการสำเร็จ — ขอบคุณครับ!`);
+  if(!editableTools.length){ toast('ไม่มีรายการที่ต้องส่งเพิ่มเติมในสัปดาห์นี้','warn'); return; }
+  const allOk=editableTools.every(t=>wkDraftComplete(t));
+  if(!allOk){ toast('กรุณาถ่ายรูปและประเมินสภาพให้ครบทุกรายการก่อนส่ง','warn'); return; }
+  toast('กำลังส่งข้อมูล...','warn');
+  try{
+    const updates={};
+    const now=new Date().toISOString();
+    editableTools.forEach(t=>{
+      const d=wkDrafts[t.id];
+      // compute overall condition from units (worst case wins)
+      const unitVals=Object.values(d.units||{});
+      const overall=unitVals.includes('bad')?'bad':unitVals.includes('warn')?'warn':unitVals.length?'ok':'none';
+      updates[`fab/weekly/${wk}/${t.id}`]={
+        submittedBy: wkPubName,
+        submittedAt: now,
+        image: d.image,
+        units: d.units||{},
+        condition: overall,
+        note: d.note||'',
+        status: 'pending',
+      };
+    });
+    await db.ref().update(updates);
+    editableTools.forEach(t=>{ delete wkDrafts[t.id]; });
+    toast(`ส่งรูป ${editableTools.length} รายการสำเร็จ — ขอบคุณครับ!`);
+  }catch(err){
+    console.error(err);
+    toast('ส่งข้อมูลไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่','warn');
+  }
 }
 async function approveWk(wk,toolId){
   await WEEKLY_REF.child(`${wk}/${toolId}/status`).set('approved');
