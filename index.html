@@ -1895,13 +1895,14 @@ function hideWeeklyPage(){
 }
 
 /* ── Draft completeness helper ──
-   A tool's weekly draft is "complete" once a photo has been taken
-   AND every physical unit has an assigned condition. This is the
-   single source of truth used both to enable/disable the submit
-   button and to validate before actually writing to Firebase. */
+   A tool's weekly draft is "complete" once every physical unit has
+   an assigned condition. A photo is optional and no longer required
+   to submit. This is the single source of truth used both to
+   enable/disable the submit button and to validate before actually
+   writing to Firebase. */
 function wkDraftComplete(t){
   const d=wkDrafts[t.id];
-  if(!d||!d.image) return false;
+  if(!d) return false;
   const qty=parseInt(t.qty);
   const unitCount=isNaN(qty)?1:Math.max(1,qty);
   for(let i=1;i<=unitCount;i++){
@@ -2030,7 +2031,7 @@ function renderPublicSubmit(sub,wk){
       <div class="wk-card-body${expanded?' open':''}">
         ${canEdit?`
         <div class="wk-img-zone" id="wkimgzone-${t.id}" onclick="trigWkImg(${t.id})">
-          ${imgSrc?`<img src="${imgSrc}" alt="" style="width:100%;height:100%;object-fit:cover">`:`<div class="wk-img-ph"><div class="wk-img-ph-ico">📷</div><div>แตะเพื่อถ่ายรูปหมู่ (ทุกตัวในภาพเดียว)</div></div>`}
+          ${imgSrc?`<img src="${imgSrc}" alt="" style="width:100%;height:100%;object-fit:cover">`:`<div class="wk-img-ph"><div class="wk-img-ph-ico">📷</div><div>แตะเพื่อถ่ายรูปหมู่ (ไม่บังคับ)</div></div>`}
           <div class="wk-img-overlay">📷 ${imgSrc?'เปลี่ยนรูป':'ถ่ายรูปหมู่'}</div>
           <input type="file" class="wk-img-input" id="wkfi-${t.id}" accept="image/*" capture="environment" onchange="onWkImg(event,${t.id})">
         </div>
@@ -2254,7 +2255,7 @@ async function submitAllWk(wk){
   });
   if(!editableTools.length){ toast('ไม่มีรายการที่ต้องส่งเพิ่มเติมในสัปดาห์นี้','warn'); return; }
   const allOk=editableTools.every(t=>wkDraftComplete(t));
-  if(!allOk){ toast('กรุณาถ่ายรูปและประเมินสภาพให้ครบทุกรายการก่อนส่ง','warn'); return; }
+  if(!allOk){ toast('กรุณาประเมินสภาพให้ครบทุกรายการก่อนส่ง (ถ่ายรูปได้ตามสะดวก ไม่บังคับ)','warn'); return; }
   toast('กำลังส่งข้อมูล...','warn');
   try{
     const updates={};
@@ -2267,7 +2268,7 @@ async function submitAllWk(wk){
       updates[`fab/weekly/${wk}/${t.id}`]={
         submittedBy: wkPubName,
         submittedAt: now,
-        image: d.image,
+        image: d.image||null,
         units: d.units||{},
         condition: overall,
         note: d.note||'',
